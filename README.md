@@ -156,6 +156,27 @@ value. This exact bug was found and fixed in both arbo-ocr-php and
 arbo-ocr-go after it crashed `arboocr_demo` in production; this crate
 avoids it from the start.
 
+## Benchmark
+
+`arbo-ocr-rust` was compared against arbo-ocr-php and arbo-ocr-go on the
+same 5-image SROIE smoke set — all three call the identical `arboocr_demo`
+binary, so accuracy is the same across all three; this measures wrapper
+overhead only (subprocess spawn − arboocr_demo's own reported time):
+
+| Size | arbo-php | arbo-go | arbo-rust |
+|--------|----------:|---------:|-----------:|
+| tiny | 193 ms | 137 ms | 131 ms |
+| small | 231 ms | 171 ms | 172 ms |
+| medium | 303 ms | 248 ms | 249 ms |
+
+Go and Rust overhead is essentially tied — both are compiled binaries
+paying only process-spawn cost, no interpreter startup. PHP runs ~55–65ms
+higher (`php.exe` interpreter startup on top of `proc_open`). Same accuracy
+across all three; all three match or beat a PP-OCRv6-based Node/Bun
+reference implementation on this sample at every size. Full methodology in
+the "wrapper benchmark" section of the internal `compare/RESULTS.md`
+companion doc (not published in this repo).
+
 ## License
 
 Apache-2.0
