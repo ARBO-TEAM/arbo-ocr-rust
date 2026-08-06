@@ -1,0 +1,22 @@
+[package]
+name = "arbo-ocr"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Rust wrapper for arboOCR — runs the prebuilt arboocr_demo binary via std::process::Command, no C++ build required."
+
+[lib]
+name = "arbo_ocr"
+path = "src/lib.rs"
+
+[[bin]]
+name = "fake_arboocr"
+path = "src/bin/fake_arboocr.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ureq = "2"
+zip = { version = "0.6", default-features = false, features = ["deflate"] }
+flate2 = "1"
+tar = "0.4"
