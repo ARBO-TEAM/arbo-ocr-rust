@@ -7,6 +7,16 @@ pub struct Point {
     pub y: f64,
 }
 
+/// One recognized word inside a [`LineResult`] — one polygon per word, or
+/// per character for CJK, which has no spaces to split on. Only produced
+/// when [`crate::Config::word_boxes`] is set.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct WordBox {
+    pub text: String,
+    pub score: f64,
+    pub polygon: Vec<Point>,
+}
+
 /// One recognized text line. Polygon points are in the order arboOCR
 /// reports them (clockwise from top-left-ish).
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -16,6 +26,12 @@ pub struct LineResult {
     #[serde(rename = "detScore")]
     pub det_score: f64,
     pub polygon: Vec<Point>,
+    /// Per-word polygons; empty unless [`crate::Config::word_boxes`] is set.
+    /// `#[serde(default)]` is load-bearing: arboOCR omits the `"words"` key
+    /// entirely when word boxes are off rather than emitting an empty array,
+    /// so without it every ordinary result would fail to deserialize.
+    #[serde(default)]
+    pub words: Vec<WordBox>,
 }
 
 /// A full-page OCR result — mirrors arboOCR's `PagePrediction`. An empty

@@ -14,7 +14,7 @@ arbo-ocr = { git = "https://github.com/ARBO-TEAM/arbo-ocr-rust" }
 `Engine::new` downloads the matching arboOCR release binary (Windows or
 Linux, auto-detected) the first time it's used if `Config.bin_path` is
 `None` — see "How it works" below. Verified working end to end against
-[`v0.1.0-php1`](https://github.com/wafik/ArboOCR/releases/tag/v0.1.0-php1)
+[`v0.2.0`](https://github.com/wafik/ArboOCR/releases/tag/v0.2.0)
 on both platforms. If it fails anyway (offline, unsupported OS), download a
 release manually from the
 [arboOCR releases page](https://github.com/wafik/ArboOCR/releases) and pass
@@ -83,6 +83,60 @@ An empty `result.lines` vec means no text was found — not an error.
 `Engine::recognize` returns `Err(OcrError)` only when the process itself
 fails to start, exits non-zero, or produces unparseable output.
 
+### Tuning options
+
+Beyond the model/provider fields above, `Config` exposes arboOCR's accuracy
+and throughput knobs. Each is `Option` and omitted from the command line
+when `None`, so leaving it unset keeps arboOCR's own default:
+
+| Field | Flag | Default when `None` | What it does |
+|---|---|---|---|
+| `min_confidence` | `--min-confidence` | `0.5` | Drops lines below this recognition confidence; `Some(0.0)` disables the filter |
+| `rec_batch_num` | `--rec-batch-num` | `6` | Crops per recognition inference call |
+| `det_limit_side_len` | `--det-limit-side-len` | `960` | Longest image side for the detection resize |
+| `log_level` | `--log-level` | silent | `"debug"`/`"info"`/`"warn"`/`"error"` — engine logs on stderr |
+| `word_boxes` | `--word-boxes` | `false` | Also fill `LineResult::words` (see below) |
+
+`word_boxes: true` adds a `WordBox { text, score, polygon }` per word to
+each line (per *character* for CJK, which has no spaces to split on):
+
+```rust
+let engine = Engine::new(Config {
+    models_dir: Some("/path/to/models".to_string()),
+    word_boxes: true,
+    ..Default::default()
+})?;
+
+for line in &engine.recognize("/path/to/image.jpg")?.lines {
+    for word in &line.words {
+        println!("{} ({:.3})", word.text, word.score);
+    }
+}
+```
+
+`line.words` is empty when `word_boxes` is off — arboOCR omits the key
+entirely in that case, which is the normal shape.
+
+Batch mode (`--images-from`) is deliberately not exposed: it returns a JSON
+*array* of pages rather than a single page object, so it needs a different
+result type than `recognize`'s `PageResult`.
+
+### Errors and exit codes
+
+`OcrError::exit_code` carries `arboocr_demo`'s exit status:
+
+| Code | Meaning |
+|---|---|
+| `0` | Success (an empty `lines` vec is still success) |
+| `1` | Usage error, or no text found |
+| `2` | Nothing usable ran — model load failed or recognition threw |
+
+Exit code `2` most often means `models_dir` is wrong or the ONNX files for
+the selected `model_type` are missing. Note that as of arboOCR v0.2.0 the
+binary is **silent on stderr unless `--log-level` is passed**, so
+`OcrError::stderr` will be empty by default — set `log_level:
+Some("error".to_string())` when you need the engine to explain itself.
+
 ## Quick example (tiny model, fastest)
 
 For a fast local smoke test, use `model_type: "tiny"` — the
@@ -129,9 +183,14 @@ Cargo has no build-time install hook like Composer's `post-install-cmd`, so
 `Engine::new` downloads lazily instead, the same way arbo-ocr-go does:
 calling `installer::ensure_installed(None)` when `Config.bin_path` is
 `None`, caching the result under the OS user cache directory
-(`%LOCALAPPDATA%\arbo-ocr-rust\<platform>` on Windows,
-`$XDG_CACHE_HOME/arbo-ocr-rust/<platform>` or
-`~/.cache/arbo-ocr-rust/<platform>` on Linux). Call
+(`%LOCALAPPDATA%\arbo-ocr-rust\<version>\<platform>` on Windows,
+`$XDG_CACHE_HOME/arbo-ocr-rust/<version>/<platform>` or
+`~/.cache/arbo-ocr-rust/<version>/<platform>` on Linux). The pinned arboOCR
+release tag is part of that path on purpose: the installer short-circuits
+when the binary already exists, so without it an upgrade of this crate would
+keep reusing whatever release the machine downloaded first and never fetch
+the new one. Cache directories for older versions are left in place rather
+than deleted. Call
 `installer::ensure_installed(Some(dir))` yourself (e.g. in a container build
 step) if you want to control exactly when the download happens, then pass
 the returned path as `Config.bin_path`.
@@ -148,7 +207,7 @@ implementation, a class of bug the PHP and Go wrappers had to explicitly
 design around.
 
 Bool options (`use_angle_cls`, `use_cuda`, `use_tensorrt`, `use_fp16`,
-`use_clahe`) are always sent as a single `--flag=value` token, never a bare
+`use_clahe`, `word_boxes`) are always sent as a single `--flag=value` token, never a bare
 `--flag` followed by a separate `true`/`false` token — `arboocr_demo`'s
 argument parser (cxxopts) only binds a bool flag's value via `=`; the
 two-token form leaves the flag implicitly `true` regardless of the intended

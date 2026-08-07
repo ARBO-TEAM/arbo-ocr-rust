@@ -30,6 +30,24 @@ fn recognize_parses_successful_json() {
     assert_eq!(result.lines[0].polygon.len(), 1);
     assert_eq!(result.lines[0].polygon[0].x, 1.0);
     assert_eq!(result.lines[0].polygon[0].y, 2.0);
+    // arboOCR omits "words" entirely unless --word-boxes is on; this must
+    // deserialize to an empty vec, not fail. Guards LineResult's
+    // #[serde(default)] against being dropped.
+    assert!(result.lines[0].words.is_empty());
+}
+
+#[test]
+fn recognize_parses_word_boxes_when_present() {
+    let engine = engine_with_fake_bin();
+    let result = engine.recognize("WORDS").expect("recognize");
+
+    let words = &result.lines[0].words;
+    assert_eq!(words.len(), 2);
+    assert_eq!(words[0].text, "hi");
+    assert_eq!(words[0].score, 0.95);
+    assert_eq!(words[0].polygon.len(), 1);
+    assert_eq!(words[1].text, "there");
+    assert_eq!(words[1].polygon[0].x, 3.0);
 }
 
 #[test]

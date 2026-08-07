@@ -9,4 +9,4 @@ mod types;
 
 pub use engine::{Config, Engine};
 pub use error::OcrError;
-pub use types::{LineResult, PageResult, Point};
+pub use types::{LineResult, PageResult, Point, WordBox};

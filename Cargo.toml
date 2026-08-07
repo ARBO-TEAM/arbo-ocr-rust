@@ -1,6 +1,6 @@
 [package]
 name = "arbo-ocr"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 license = "Apache-2.0"
 description = "Rust wrapper for arboOCR — runs the prebuilt arboocr_demo binary via std::process::Command, no C++ build required."

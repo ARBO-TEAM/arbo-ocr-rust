@@ -22,6 +22,15 @@ fn main() {
         "GARBAGE" => {
             println!("not json");
         }
+        // The only shape that carries a "words" array. Every other branch
+        // omits the key entirely, exactly as the real binary does when
+        // --word-boxes is off — which is what LineResult's #[serde(default)]
+        // has to survive.
+        "WORDS" => {
+            println!(
+                "{{\"backend\":\"cpu\",\"image\":\"WORDS\",\"elapsedMs\":12.5,\"lines\":[{{\"text\":\"hi there\",\"score\":0.9,\"detScore\":0.8,\"polygon\":[{{\"x\":1.0,\"y\":2.0}}],\"words\":[{{\"text\":\"hi\",\"score\":0.95,\"polygon\":[{{\"x\":1.0,\"y\":2.0}}]}},{{\"text\":\"there\",\"score\":0.85,\"polygon\":[{{\"x\":3.0,\"y\":4.0}}]}}]}}]}}"
+            );
+        }
         "NOISY" => {
             // Past a pipe's OS buffer (~64KB), written before any stdout —
             // the real arboocr_demo does this via ONNXRuntime
