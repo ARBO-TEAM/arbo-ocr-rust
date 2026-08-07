@@ -20,10 +20,28 @@ pub struct Config {
     pub use_tensorrt: bool,
     pub use_fp16: bool,
     pub use_clahe: bool,
+    /// Also emit a polygon per word (per character for CJK) — populates
+    /// [`crate::LineResult::words`]. Off by default: the spans are nearly
+    /// free to compute, but carrying them for every line of every page is
+    /// not.
+    pub word_boxes: bool,
     pub det_model_path: Option<String>,
     pub cls_model_path: Option<String>,
     pub rec_model_path: Option<String>,
     pub dict_path: Option<String>,
+    /// Drop lines below this recognition confidence; `0.0` disables the
+    /// filter. `None` leaves arboOCR's own default (0.5) in place.
+    pub min_confidence: Option<f32>,
+    /// Crops per recognition inference call. `None` = arboOCR's default (6).
+    pub rec_batch_num: Option<u32>,
+    /// Longest image side for the detection resize. `None` = arboOCR's
+    /// default (960).
+    pub det_limit_side_len: Option<u32>,
+    /// `"debug"` | `"info"` | `"warn"` | `"error"`. `None` = arboOCR's
+    /// default, which is silent. Worth setting when a run fails: as of
+    /// v0.2.0 the binary writes nothing to stderr unless this is passed, so
+    /// [`crate::OcrError::stderr`] is empty without it.
+    pub log_level: Option<String>,
 }
 
 /// Runs the prebuilt `arboocr_demo` binary via `std::process::Command` and
@@ -112,15 +130,17 @@ impl Engine {
     }
 
     /// Mirrors Engine.php's `flagsFromOptions()` / arbo-ocr-go's
-    /// `flagsFromConfig()`: string fields emit `--flag-name`, `<value>`
-    /// only when set; the five bool fields always emit a single
+    /// `flagsFromConfig()`: string and numeric fields emit `--flag-name`,
+    /// `<value>` only when set; the six bool fields always emit a single
     /// `--flag-name=value` token — cxxopts only binds a bool flag's value
     /// via "=", so a bare "--flag" followed by a separate "true"/"false"
     /// token would leave the flag implicitly true and the value ignored.
+    /// That quirk is bool-only: options taking a value parse the following
+    /// argv token fine, so the two-token form is correct for them.
     fn flags_from_config(&self) -> Vec<String> {
         let mut flags = Vec::new();
 
-        let string_flags: [(&Option<String>, &str); 7] = [
+        let string_flags: [(&Option<String>, &str); 8] = [
             (&self.cfg.models_dir, "models-dir"),
             (&self.cfg.ocr_version, "ocr-version"),
             (&self.cfg.model_type, "model-type"),
@@ -128,6 +148,7 @@ impl Engine {
             (&self.cfg.cls_model_path, "cls-model"),
             (&self.cfg.rec_model_path, "rec-model"),
             (&self.cfg.dict_path, "dict"),
+            (&self.cfg.log_level, "log-level"),
         ];
         for (value, flag) in string_flags {
             if let Some(v) = value {
@@ -136,12 +157,31 @@ impl Engine {
             }
         }
 
-        let bool_flags: [(bool, &str); 5] = [
+        // Left off entirely when None so arboOCR keeps its own defaults
+        // (min-confidence 0.5, rec-batch-num 6, det-limit-side-len 960)
+        // rather than us restating them and having to track future changes.
+        if let Some(v) = self.cfg.min_confidence {
+            flags.push("--min-confidence".to_string());
+            flags.push(v.to_string());
+        }
+        let uint_flags: [(&Option<u32>, &str); 2] = [
+            (&self.cfg.rec_batch_num, "rec-batch-num"),
+            (&self.cfg.det_limit_side_len, "det-limit-side-len"),
+        ];
+        for (value, flag) in uint_flags {
+            if let Some(v) = value {
+                flags.push(format!("--{flag}"));
+                flags.push(v.to_string());
+            }
+        }
+
+        let bool_flags: [(bool, &str); 6] = [
             (self.cfg.use_angle_cls, "angle"),
             (self.cfg.use_cuda, "cuda"),
             (self.cfg.use_tensorrt, "tensorrt"),
             (self.cfg.use_fp16, "fp16"),
             (self.cfg.use_clahe, "clahe"),
+            (self.cfg.word_boxes, "word-boxes"),
         ];
         for (value, flag) in bool_flags {
             flags.push(format!("--{flag}={value}"));
@@ -171,6 +211,7 @@ mod tests {
                 use_tensorrt: false,
                 use_fp16: false,
                 use_clahe: true,
+                word_boxes: true,
                 ..Default::default()
             },
         };
@@ -181,11 +222,61 @@ mod tests {
         assert!(flags.contains(&"--tensorrt=false".to_string()));
         assert!(flags.contains(&"--fp16=false".to_string()));
         assert!(flags.contains(&"--clahe=true".to_string()));
-        for bare in ["--angle", "--cuda", "--tensorrt", "--fp16", "--clahe"] {
+        assert!(flags.contains(&"--word-boxes=true".to_string()));
+        for bare in [
+            "--angle",
+            "--cuda",
+            "--tensorrt",
+            "--fp16",
+            "--clahe",
+            "--word-boxes",
+        ] {
             assert!(
                 !flags.contains(&bare.to_string()),
                 "{bare} must not appear as a bare token"
             );
+        }
+    }
+
+    /// The value-taking options are the mirror image of the bool ones: they
+    /// use the two-token form, and they must be absent entirely when unset
+    /// so arboOCR applies its own defaults instead of ours.
+    #[test]
+    fn numeric_flags_are_two_token_and_omitted_when_unset() {
+        let unset = Engine {
+            bin_path: PathBuf::new(),
+            cfg: Config::default(),
+        };
+        let flags = unset.flags_from_config();
+        for absent in ["--min-confidence", "--rec-batch-num", "--det-limit-side-len"] {
+            assert!(
+                !flags.iter().any(|f| f.starts_with(absent)),
+                "{absent} must not be emitted when unset"
+            );
+        }
+
+        let set = Engine {
+            bin_path: PathBuf::new(),
+            cfg: Config {
+                min_confidence: Some(0.25),
+                rec_batch_num: Some(8),
+                det_limit_side_len: Some(1280),
+                log_level: Some("warn".to_string()),
+                ..Default::default()
+            },
+        };
+        let flags = set.flags_from_config();
+        for (flag, value) in [
+            ("--min-confidence", "0.25"),
+            ("--rec-batch-num", "8"),
+            ("--det-limit-side-len", "1280"),
+            ("--log-level", "warn"),
+        ] {
+            let i = flags
+                .iter()
+                .position(|f| f == flag)
+                .unwrap_or_else(|| panic!("{flag} missing"));
+            assert_eq!(flags[i + 1], value, "{flag} value must be the next token");
         }
     }
 }

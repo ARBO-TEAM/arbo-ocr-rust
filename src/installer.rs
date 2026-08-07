@@ -14,7 +14,7 @@ const REPO: &str = "wafik/ArboOCR";
 /// The release tag this crate downloads. Same tag arbo-ocr-php and
 /// arbo-ocr-go pin — the release binary itself is language-agnostic, so all
 /// three packages track the same build.
-const PINNED_VERSION: &str = "v0.1.0-php1";
+const PINNED_VERSION: &str = "v0.2.0";
 
 /// Returns `"windows-x64"` or `"linux-x64"` based on the compile-time
 /// target, or `None` if unsupported.
@@ -62,8 +62,8 @@ fn user_cache_dir() -> Result<PathBuf, String> {
 /// Makes sure the `arboocr_demo` binary exists locally, downloading it from
 /// GitHub Releases if missing, and returns its absolute path. `bin_dir ==
 /// None` means: use the default cache directory,
-/// `<user_cache_dir>/arbo-ocr-rust/<platform>`. Returns an error if the
-/// platform is unsupported or the download/extract fails.
+/// `<user_cache_dir>/arbo-ocr-rust/<PINNED_VERSION>/<platform>`. Returns an
+/// error if the platform is unsupported or the download/extract fails.
 pub fn ensure_installed(bin_dir: Option<&Path>) -> Result<PathBuf, String> {
     let platform = detect_platform().ok_or_else(|| {
         format!(
@@ -76,12 +76,26 @@ pub fn ensure_installed(bin_dir: Option<&Path>) -> Result<PathBuf, String> {
 
     let bin_dir = match bin_dir {
         Some(d) => d.to_path_buf(),
-        None => user_cache_dir()?.join("arbo-ocr-rust").join(platform),
+        // PINNED_VERSION is a path segment on purpose — do not "tidy" it out.
+        // The is_file() check below short-circuits on "binary already exists",
+        // so a version-less cache path makes a PINNED_VERSION bump a no-op for
+        // everyone who ever ran an older release: the download URL changes, but
+        // the stale binary still sits at the same path, so we return it and
+        // never download the new one. Keying the directory by version means a
+        // bump lands in a fresh empty directory and actually fetches.
+        //
+        // Old version directories are deliberately left in place rather than
+        // cleaned up: a few MB of stale cache is a much smaller problem than
+        // deletion logic quietly removing something a caller still points at.
+        None => user_cache_dir()?
+            .join("arbo-ocr-rust")
+            .join(PINNED_VERSION)
+            .join(platform),
     };
 
     let bin_path = bin_dir.join(binary_name(platform));
     if bin_path.is_file() {
-        return Ok(bin_path); // already installed
+        return Ok(bin_path); // already installed at this version
     }
 
     let asset = asset_name(platform);
