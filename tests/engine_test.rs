@@ -69,6 +69,18 @@ fn recognize_returns_error_on_unparseable_output() {
 }
 
 #[test]
+fn download_models_returns_the_binarys_report() {
+    let engine = engine_with_fake_bin();
+    let report = engine.download_models().expect("download_models");
+
+    // The real binary prints one ok/skipped/absent/MISSING line per model
+    // file; the wrapper's job is to hand that back verbatim, not parse it.
+    assert!(report.contains("det"));
+    assert!(report.contains("rec"));
+    assert!(!report.contains("MISSING"));
+}
+
+#[test]
 fn new_engine_errors_when_bin_path_missing() {
     let missing = std::env::temp_dir().join("no-such-arboocr-binary-xyz");
     let result = Engine::new(Config {

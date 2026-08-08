@@ -7,6 +7,17 @@ use std::io::Write;
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // Prefetch mode takes no --image at all (the real binary fetches and
+    // exits before it would open one), so it has to be dispatched before the
+    // sentinel-image match below rather than as a branch inside it.
+    if args.iter().any(|a| a == "--download-models") {
+        println!("ok       det   /cache/PP-OCRv6_det.onnx");
+        println!("skipped  cls   /cache/PP-OCRv6_cls.onnx");
+        println!("ok       rec   /cache/PP-OCRv6_rec_small.onnx");
+        println!("absent   dict  /cache/PP-OCRv6_rec_small_dict.txt");
+        return;
+    }
+
     let image = args
         .iter()
         .position(|a| a == "--image")

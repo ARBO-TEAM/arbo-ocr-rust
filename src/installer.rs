@@ -14,6 +14,13 @@ const REPO: &str = "wafik/ArboOCR";
 /// The release tag this crate downloads. Same tag arbo-ocr-php and
 /// arbo-ocr-go pin — the release binary itself is language-agnostic, so all
 /// three packages track the same build.
+///
+/// TODO: bump this to the arboOCR release that adds model auto-download,
+/// once it ships. Until then [`crate::Config::no_download`],
+/// [`crate::Config::models_url`] and [`crate::Engine::download_models`] are
+/// passthroughs to flags the installed binary does not have: v0.2.0 answers
+/// an unknown option with a usage error and exit 1. The README's Models
+/// section carries the same caveat and should lose it in the same commit.
 const PINNED_VERSION: &str = "v0.2.0";
 
 /// Returns `"windows-x64"` or `"linux-x64"` based on the compile-time
