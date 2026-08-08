@@ -29,6 +29,21 @@ pub struct Config {
     pub cls_model_path: Option<String>,
     pub rec_model_path: Option<String>,
     pub dict_path: Option<String>,
+    /// Forbid the binary from fetching missing models — fail instead of
+    /// downloading. Emits `--no-download` only when `true`; `false` (the
+    /// default) leaves the flag off entirely, so the config stays compatible
+    /// with binaries predating model auto-download.
+    ///
+    /// Requires the next arboOCR release; the pinned `v0.2.0` binary does
+    /// not know this flag and exits 1 on it.
+    pub no_download: bool,
+    /// Directory URL to fetch missing models from — an internal mirror
+    /// instead of the default pinned models release. `None` = leave the flag
+    /// off and let the binary use its own default.
+    ///
+    /// Requires the next arboOCR release; the pinned `v0.2.0` binary does
+    /// not know this flag and exits 1 on it.
+    pub models_url: Option<String>,
     /// Drop lines below this recognition confidence; `0.0` disables the
     /// filter. `None` leaves arboOCR's own default (0.5) in place.
     pub min_confidence: Option<f32>,
@@ -140,7 +155,7 @@ impl Engine {
     fn flags_from_config(&self) -> Vec<String> {
         let mut flags = Vec::new();
 
-        let string_flags: [(&Option<String>, &str); 8] = [
+        let string_flags: [(&Option<String>, &str); 9] = [
             (&self.cfg.models_dir, "models-dir"),
             (&self.cfg.ocr_version, "ocr-version"),
             (&self.cfg.model_type, "model-type"),
@@ -148,6 +163,7 @@ impl Engine {
             (&self.cfg.cls_model_path, "cls-model"),
             (&self.cfg.rec_model_path, "rec-model"),
             (&self.cfg.dict_path, "dict"),
+            (&self.cfg.models_url, "models-url"),
             (&self.cfg.log_level, "log-level"),
         ];
         for (value, flag) in string_flags {
@@ -187,7 +203,60 @@ impl Engine {
             flags.push(format!("--{flag}={value}"));
         }
 
+        // The odd one out: emitted only when true, unlike the six above.
+        // Model auto-download lands in the arboOCR release *after* the
+        // pinned v0.2.0, so `--no-download` is an unknown option to the
+        // binary this crate currently installs — and cxxopts answers an
+        // unknown option with a usage error and exit 1, failing every
+        // recognize() call. Off-by-default therefore has to mean "no token
+        // at all", not "--no-download=false". Keeps the "=" form when it is
+        // emitted for the same cxxopts reason as the block above.
+        if self.cfg.no_download {
+            flags.push("--no-download=true".to_string());
+        }
+
         flags
+    }
+
+    /// Prefetches the models for this config's `ocr_version`/`model_type`
+    /// into arboOCR's own model cache by running `arboocr_demo
+    /// --download-models`, which fetches and exits without doing any OCR.
+    /// Returns the binary's per-file report (one `ok`/`skipped`/`absent`/
+    /// `MISSING` line per model file) on success.
+    ///
+    /// Useful in a CI step or a Docker build layer so the first real
+    /// [`Engine::recognize`] does not pay for the download mid-request. On a
+    /// binary that supports it, a missing model is fetched on demand anyway,
+    /// so this is a warm-the-cache convenience rather than a prerequisite.
+    ///
+    /// Requires the next arboOCR release — the pinned `v0.2.0` binary has
+    /// no `--download-models` flag and answers with a usage error and exit
+    /// code 1.
+    pub fn download_models(&self) -> Result<String, OcrError> {
+        let mut args = vec!["--download-models".to_string()];
+        args.extend(self.flags_from_config());
+
+        let output = Command::new(&self.bin_path)
+            .args(&args)
+            .output()
+            .map_err(|e| OcrError {
+                message: format!("could not start process: {e}"),
+                exit_code: None,
+                stderr: String::new(),
+            })?;
+
+        if !output.status.success() {
+            return Err(OcrError {
+                message: format!(
+                    "arboocr_demo --download-models exited with code {}",
+                    output.status.code().unwrap_or(-1)
+                ),
+                exit_code: output.status.code(),
+                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            });
+        }
+
+        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
     }
 }
 
@@ -278,5 +347,55 @@ mod tests {
                 .unwrap_or_else(|| panic!("{flag} missing"));
             assert_eq!(flags[i + 1], value, "{flag} value must be the next token");
         }
+    }
+
+    /// The load-bearing one for anyone on the currently pinned arboOCR
+    /// v0.2.0, which predates model auto-download: that binary does not know
+    /// `--no-download` or `--models-url`, and cxxopts answers an unknown
+    /// option with a usage error and exit 1. A default Config must therefore
+    /// produce a command line byte-identical to the pre-feature one — no
+    /// `--no-download=false`, no empty `--models-url`.
+    #[test]
+    fn download_flags_are_absent_from_a_default_config() {
+        let unset = Engine {
+            bin_path: PathBuf::new(),
+            cfg: Config::default(),
+        };
+        let flags = unset.flags_from_config();
+
+        for absent in ["--no-download", "--models-url", "--download-models"] {
+            assert!(
+                !flags.iter().any(|f| f.starts_with(absent)),
+                "{absent} must not be emitted by a default Config"
+            );
+        }
+    }
+
+    /// `no_download` is a bool but not one of the always-emitted six, so it
+    /// needs its own check that setting it produces the "=" form cxxopts
+    /// requires; `models_url` is an ordinary two-token string option.
+    #[test]
+    fn download_flags_are_emitted_when_set() {
+        let set = Engine {
+            bin_path: PathBuf::new(),
+            cfg: Config {
+                no_download: true,
+                models_url: Some("https://mirror.internal/arboocr/models/".to_string()),
+                ..Default::default()
+            },
+        };
+        let flags = set.flags_from_config();
+
+        assert!(flags.contains(&"--no-download=true".to_string()));
+        assert!(
+            !flags.contains(&"--no-download".to_string()),
+            "--no-download must not appear as a bare token"
+        );
+
+        let i = flags
+            .iter()
+            .position(|f| f == "--models-url")
+            .expect("--models-url missing");
+        assert_eq!(flags[i + 1], "https://mirror.internal/arboocr/models/");
     }
 }

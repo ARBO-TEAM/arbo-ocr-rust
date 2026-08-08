@@ -20,15 +20,18 @@ release manually from the
 [arboOCR releases page](https://github.com/wafik/ArboOCR/releases) and pass
 `Config.bin_path` explicitly.
 
-You also need the OCR models — arboOCR does not bundle them. See
-[Models](#models) below for exactly which files each `model_type` needs and
-where to get them.
+You also need the OCR models. The pinned `v0.2.0` binary does not fetch them
+for you, so see [Models](#models) below for exactly which files each
+`model_type` needs, where to get them, and what changes once arboOCR's model
+auto-download ships.
 
 ## Models
 
-arboOCR doesn't bundle OCR models — you point `Config.models_dir` at a
-folder of PP-OCRv6 ONNX files. Only the recognizer has size variants; the
-detector is always one file regardless of `model_type`:
+arboOCR doesn't bundle OCR models in the release archive, and the release
+this crate pins (`v0.2.0`) never downloads them either — you point
+`Config.models_dir` at a folder of PP-OCRv6 ONNX files. Only the recognizer
+has size variants; the detector is always one file regardless of
+`model_type`:
 
 | File | Needed for | Varies by `model_type`? |
 |---|---|---|
@@ -44,7 +47,7 @@ You only need the recognizer size(s) you'll actually use — e.g. for
 later is just changing `model_type`; `models_dir` can hold all three sizes
 side by side if you want to switch freely.
 
-**Getting the files** — arboOCR doesn't host default download URLs (see its
+**Getting the files** — `v0.2.0` has no default download URLs (see arboOCR's
 own [Models section](https://github.com/wafik/ArboOCR#models)), so pick
 whichever applies:
 - Already have a Python `rapidocr` install? Copy its `models/` directory
@@ -53,6 +56,69 @@ whichever applies:
 - A local arboOCR checkout's `models/` directory already has the detector,
   classifier, and all three recognizer sizes — handy for local dev (see the
   tiny-model example below).
+
+### Model auto-download — requires the next arboOCR release
+
+The arboOCR release *after* `v0.2.0` adds model auto-download: a missing
+model file is fetched into a per-user cache and SHA-256 verified before use.
+This crate already passes the controlling flags through, but **the binary it
+installs today does not understand them yet** —
+`installer::PINNED_VERSION` is still `v0.2.0`, whose argument parser answers
+an unknown option with a usage error and exit code 1. Leave these fields at
+their defaults until that pin moves; a default `Config` emits none of the
+flags below, so nothing about a `v0.2.0` command line changes.
+
+| Field | Flag | Default | What it does |
+|---|---|---|---|
+| `no_download` | `--no-download` | `false` — flag omitted entirely | Never fetch missing models; fail instead |
+| `models_url` | `--models-url` | `None` — flag omitted entirely | Directory URL to fetch missing models from, e.g. an internal mirror |
+
+`Engine::download_models()` runs `arboocr_demo --download-models`, which
+fetches the models for the configured `ocr_version`/`model_type` and exits
+without doing any OCR — for a CI step or Docker build layer that wants the
+cache warm before the first request pays for it. It returns the binary's
+per-file report (one `ok` / `skipped` / `absent` / `MISSING` line per file)
+as a `String`; it is a convenience, not a prerequisite, since a supporting
+binary fetches on demand anyway.
+
+```rust
+let engine = Engine::new(Config {
+    // models_url: Some("https://mirror.internal/arboocr/models/".to_string()),
+    ..Default::default()
+})?;
+print!("{}", engine.download_models()?);
+```
+
+`arboocr_demo` is a child process and `std::process::Command` inherits the
+parent's environment, so arboOCR's own environment variables work with no
+config field involved:
+
+| Env var | Effect |
+|---|---|
+| `ARBOOCR_OFFLINE=1` | Same as `no_download: true`, process-wide |
+| `ARBOOCR_MODELS_URL` | Default base URL override — same role as `models_url` |
+| `ARBOOCR_CACHE_DIR` | Override the per-user model cache directory |
+
+The model cache, tag-scoped so a future `models-v2` can never reuse a
+`models-v1` file:
+
+| Platform | Model cache directory |
+|---|---|
+| Windows | `%LOCALAPPDATA%\arboOCR\models\models-v1` |
+| macOS | `~/Library/Caches/arboOCR/models/models-v1` |
+| Linux | `$XDG_CACHE_HOME/arboOCR/models/models-v1`, else `~/.cache/arboOCR/models/models-v1` |
+
+That is arboOCR's *model* cache, distinct from this crate's *binary* cache
+under `arbo-ocr-rust/<version>/<platform>` described in
+[How it works](#how-it-works). macOS is listed for completeness:
+`installer::detect_platform` only auto-installs Windows and Linux x64
+binaries, so a macOS user supplies `Config.bin_path` themselves.
+
+Resolution order per file, once a supporting binary is pinned: an explicit
+path (`det_model_path`, `cls_model_path`, `rec_model_path`, `dict_path`) is
+never substituted by a download → an existing file in `models_dir` wins,
+with zero network traffic → only then is the file downloaded and verified.
+A populated `models_dir` therefore keeps behaving exactly as it does today.
 
 ## Usage
 
@@ -195,9 +261,12 @@ than deleted. Call
 step) if you want to control exactly when the download happens, then pass
 the returned path as `Config.bin_path`.
 
-Like the PHP and Go packages, OCR models are never bundled or
-auto-downloaded — see [Models](#models) above for exactly which files you
-need.
+OCR models are never bundled in the crate. Whether they get *downloaded* is
+a property of the `arboocr_demo` build being run, not of this wrapper: the
+pinned `v0.2.0` never touches the network for them, and the next arboOCR
+release adds auto-download — see [Models](#models) above for which files you
+need today and which flags this crate already passes through for when that
+lands.
 
 `recognize` captures the subprocess's output with `Command::output()`,
 which reads stdout and stderr concurrently on separate threads internally —
