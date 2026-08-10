@@ -34,15 +34,18 @@ pub struct Config {
     /// default) leaves the flag off entirely, so the config stays compatible
     /// with binaries predating model auto-download.
     ///
-    /// Requires the next arboOCR release; the pinned `v0.2.0` binary does
-    /// not know this flag and exits 1 on it.
+    /// Live as of the pinned `v0.3.0`. Only relevant if you point
+    /// [`Config::bin_path`] at an older binary, which does not know this
+    /// flag and exits 1 on it.
     pub no_download: bool,
     /// Directory URL to fetch missing models from — an internal mirror
     /// instead of the default pinned models release. `None` = leave the flag
-    /// off and let the binary use its own default.
+    /// off and let the binary use its own default,
+    /// `https://github.com/ARBO-TEAM/arbo-ocr-models/releases/download/models-v1/`.
     ///
-    /// Requires the next arboOCR release; the pinned `v0.2.0` binary does
-    /// not know this flag and exits 1 on it.
+    /// Live as of the pinned `v0.3.0`. Only relevant if you point
+    /// [`Config::bin_path`] at an older binary, which does not know this
+    /// flag and exits 1 on it.
     pub models_url: Option<String>,
     /// Drop lines below this recognition confidence; `0.0` disables the
     /// filter. `None` leaves arboOCR's own default (0.5) in place.
@@ -204,13 +207,14 @@ impl Engine {
         }
 
         // The odd one out: emitted only when true, unlike the six above.
-        // Model auto-download lands in the arboOCR release *after* the
-        // pinned v0.2.0, so `--no-download` is an unknown option to the
-        // binary this crate currently installs — and cxxopts answers an
-        // unknown option with a usage error and exit 1, failing every
-        // recognize() call. Off-by-default therefore has to mean "no token
-        // at all", not "--no-download=false". Keeps the "=" form when it is
-        // emitted for the same cxxopts reason as the block above.
+        // `--no-download` arrived with model auto-download in v0.3.0, so any
+        // binary older than the pin treats it as an unknown option — and
+        // cxxopts answers an unknown option with a usage error and exit 1,
+        // failing every recognize() call. Off-by-default therefore has to
+        // mean "no token at all", not "--no-download=false", which keeps a
+        // default Config runnable against a bin_path pointing at an older
+        // release. Keeps the "=" form when it is emitted for the same
+        // cxxopts reason as the block above.
         if self.cfg.no_download {
             flags.push("--no-download=true".to_string());
         }
@@ -225,13 +229,16 @@ impl Engine {
     /// `MISSING` line per model file) on success.
     ///
     /// Useful in a CI step or a Docker build layer so the first real
-    /// [`Engine::recognize`] does not pay for the download mid-request. On a
-    /// binary that supports it, a missing model is fetched on demand anyway,
-    /// so this is a warm-the-cache convenience rather than a prerequisite.
+    /// [`Engine::recognize`] does not pay for the download mid-request: a
+    /// missing model is fetched on demand anyway, so this is a
+    /// warm-the-cache convenience rather than a prerequisite. It is the
+    /// companion to [`installer::ensure_installed`] in a container build —
+    /// that call bakes in the *binary*, this one bakes in the *weights*,
+    /// which live in a separate cache.
     ///
-    /// Requires the next arboOCR release — the pinned `v0.2.0` binary has
-    /// no `--download-models` flag and answers with a usage error and exit
-    /// code 1.
+    /// Live as of the pinned `v0.3.0`. A [`Config::bin_path`] pointing at an
+    /// older binary has no `--download-models` flag and answers with a usage
+    /// error and exit code 1.
     pub fn download_models(&self) -> Result<String, OcrError> {
         let mut args = vec!["--download-models".to_string()];
         args.extend(self.flags_from_config());
@@ -349,12 +356,14 @@ mod tests {
         }
     }
 
-    /// The load-bearing one for anyone on the currently pinned arboOCR
-    /// v0.2.0, which predates model auto-download: that binary does not know
-    /// `--no-download` or `--models-url`, and cxxopts answers an unknown
-    /// option with a usage error and exit 1. A default Config must therefore
-    /// produce a command line byte-identical to the pre-feature one — no
-    /// `--no-download=false`, no empty `--models-url`.
+    /// A default Config must produce a command line byte-identical to the
+    /// pre-auto-download one — no `--no-download=false`, no empty
+    /// `--models-url`. Two reasons, both still live now that the pin is
+    /// v0.3.0: emitting nothing lets the binary apply its own defaults
+    /// (download enabled, official models URL), and it keeps a default
+    /// Config runnable against a `bin_path` aimed at a pre-v0.3.0 release,
+    /// whose cxxopts parser answers an unknown option with a usage error and
+    /// exit 1.
     #[test]
     fn download_flags_are_absent_from_a_default_config() {
         let unset = Engine {
