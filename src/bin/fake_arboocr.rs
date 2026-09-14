@@ -18,6 +18,63 @@ fn main() {
         return;
     }
 
+    // --images-from is batch mode: one process over a newline-delimited list
+    // file, one JSON array on stdout in list order. Each path is echoed back
+    // as that page's line text, so the tests can assert positional matching
+    // rather than assume it.
+    //
+    // The error paths are selected by sentinel *paths* rather than argv,
+    // because the engine puts the list in a file — a sentinel flag would never
+    // reach this process.
+    if let Some(i) = args.iter().position(|a| a == "--images-from") {
+        let raw = std::fs::read_to_string(args.get(i + 1).map(String::as_str).unwrap_or(""))
+            .unwrap_or_default();
+        // Sentinels stay in the list and get a page like any other path: they
+        // are real entries to the engine, which counts them and matches by
+        // position. Drop-last below is what creates the short array.
+        let paths: Vec<&str> = raw
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty() && !l.starts_with('#'))
+            .collect();
+
+        // What a bad flag actually does: exit 1 with no JSON on stdout, which
+        // must not be confused with the ordinary "a page came back empty"
+        // exit 1 that still carries the array.
+        if raw.lines().any(|l| l.trim().ends_with("--batch-usage-error")) {
+            eprintln!("Option '--images-from' does not exist");
+            std::process::exit(1);
+        }
+
+        // A short array: one page fewer than the caller asked for, which the
+        // engine has to reject rather than match up by position.
+        let drop_last = raw.lines().any(|l| l.trim().ends_with("--batch-short"));
+
+        let mut pages: Vec<String> = paths
+            .iter()
+            .map(|p| {
+                let basename = std::path::Path::new(p)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                format!(
+                    "{{\"backend\":\"cpu\",\"image\":\"{basename}\",\"elapsedMs\":12.5,\"lines\":[{{\"text\":\"{p}\",\"score\":0.9,\"detScore\":0.8,\"polygon\":[{{\"x\":1.0,\"y\":2.0}}]}}]}}"
+                )
+            })
+            .collect();
+        if drop_last {
+            pages.pop();
+        }
+        println!("[{}]", pages.join(","));
+
+        // A batch exits 1 when any image came back empty — an ordinary
+        // outcome that still carries the JSON the caller asked for.
+        if raw.lines().any(|l| l.trim().ends_with("--batch-exit1")) {
+            std::process::exit(1);
+        }
+        return;
+    }
+
     let image = args
         .iter()
         .position(|a| a == "--image")

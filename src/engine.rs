@@ -147,6 +147,140 @@ impl Engine {
         })
     }
 
+    /// OCR many images with **one** `arboocr_demo` process
+    /// (`--images-from <list> --json`), returning one [`PageResult`] per input
+    /// in input order.
+    ///
+    /// [`Engine::recognize`] starts a fresh process per image, and that
+    /// process start plus model load dominates a short page; this pays it once
+    /// for the whole list instead.
+    ///
+    /// Results are matched to inputs **by position** because the binary
+    /// reports only a basename. That is sound only while the counts agree, so
+    /// a mismatch is an error rather than a shifted list.
+    ///
+    /// A batch exits `1` when *any* image came back empty. That is an ordinary
+    /// outcome, not a failure, and is tolerated as long as the JSON array is
+    /// still on stdout — a usage error exits `1` too but leaves stdout empty,
+    /// and that one is an error.
+    pub fn recognize_batch(&self, image_paths: &[String]) -> Result<Vec<PageResult>, OcrError> {
+        if image_paths.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // The list file is newline-delimited and the binary skips blank lines
+        // and '#' lines as comments, so a path in either shape would be
+        // dropped silently and shift every later result onto the wrong input.
+        for (i, path) in image_paths.iter().enumerate() {
+            if path.is_empty() {
+                return Err(OcrError {
+                    message: format!("recognize_batch: image_paths[{i}] is empty"),
+                    exit_code: None,
+                    stderr: String::new(),
+                });
+            }
+            if path.contains('\n') || path.contains('\r') {
+                return Err(OcrError {
+                    message: format!(
+                        "recognize_batch: image_paths[{i}] contains a newline, which the image list format cannot represent: {path:?}"
+                    ),
+                    exit_code: None,
+                    stderr: String::new(),
+                });
+            }
+            if path.trim_start_matches([' ', '\t']).starts_with('#') {
+                return Err(OcrError {
+                    message: format!(
+                        "recognize_batch: image_paths[{i}] starts with '#', which arboocr_demo reads as a comment and would skip: {path:?}"
+                    ),
+                    exit_code: None,
+                    stderr: String::new(),
+                });
+            }
+        }
+
+        // No `tempfile` dependency for one list file: the pid plus a
+        // nanosecond stamp is unique enough, and the file is removed on the
+        // way out below.
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let list_path = std::env::temp_dir()
+            .join(format!("arbo-ocr-rust-{}-{stamp}.txt", std::process::id()));
+
+        std::fs::write(&list_path, format!("{}\n", image_paths.join("\n"))).map_err(|e| {
+            OcrError {
+                message: format!("could not write image list: {e}"),
+                exit_code: None,
+                stderr: String::new(),
+            }
+        })?;
+
+        let mut args = vec![
+            "--images-from".to_string(),
+            list_path.to_string_lossy().into_owned(),
+            "--json".to_string(),
+        ];
+        args.extend(self.flags_from_config());
+
+        // Same Command::output() concurrency note as recognize().
+        let output = Command::new(&self.bin_path).args(&args).output();
+        let _ = std::fs::remove_file(&list_path);
+
+        let output = output.map_err(|e| OcrError {
+            message: format!("could not start process: {e}"),
+            exit_code: None,
+            stderr: String::new(),
+        })?;
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let trimmed = stdout.trim();
+
+        // The binary overloads exit 1: "a page had no text" and "you passed a
+        // bad flag" share it. Only the first leaves the JSON array on stdout,
+        // so requiring that payload keeps a usage error an error.
+        if !output.status.success()
+            && !(output.status.code() == Some(1) && trimmed.starts_with('['))
+        {
+            return Err(OcrError {
+                message: format!(
+                    "arboocr_demo exited with code {}",
+                    output.status.code().unwrap_or(-1)
+                ),
+                exit_code: output.status.code(),
+                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            });
+        }
+
+        let pages: Vec<PageResult> = serde_json::from_str(trimmed).map_err(|_| {
+            let raw: String = trimmed.chars().take(500).collect();
+            OcrError {
+                message: format!(
+                    "arboocr_demo --images-from produced unparseable output: {raw}"
+                ),
+                exit_code: None,
+                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            }
+        })?;
+
+        // Every check above was positional, so a short or long array has to
+        // fail here rather than shift text onto the wrong file.
+        if pages.len() != image_paths.len() {
+            return Err(OcrError {
+                message: format!(
+                    "arboocr_demo returned {} results for {} images; cannot match results to inputs by position",
+                    pages.len(),
+                    image_paths.len()
+                ),
+                exit_code: None,
+                stderr: String::new(),
+            });
+        }
+
+        Ok(pages)
+    }
+
     /// Mirrors Engine.php's `flagsFromOptions()` / arbo-ocr-go's
     /// `flagsFromConfig()`: string and numeric fields emit `--flag-name`,
     /// `<value>` only when set; the six bool fields always emit a single

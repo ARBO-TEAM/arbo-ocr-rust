@@ -110,3 +110,81 @@ fn recognize_does_not_deadlock_on_large_stderr() {
         Err(_) => panic!("recognize deadlocked"),
     }
 }
+
+/// The batch error paths are selected by sentinel *paths*, not by argv: the
+/// engine writes the list to a file rather than onto the command line, so a
+/// sentinel flag would never reach the fake. `recognize_batch` passes them
+/// through verbatim (they are ordinary paths to it), which is what makes them
+/// usable as test hooks.
+fn paths(v: &[&str]) -> Vec<String> {
+    v.iter().map(|s| s.to_string()).collect()
+}
+
+#[test]
+fn recognize_batch_parses_array_in_input_order() {
+    // The fake echoes each list path back as that page's line text, so input
+    // order is observable rather than assumed.
+    let engine = engine_with_fake_bin();
+
+    let pages = engine
+        .recognize_batch(&paths(&["/a/one.jpg", "/b/two.jpg", "/c/three.jpg"]))
+        .expect("recognize_batch");
+
+    assert_eq!(
+        pages.iter().map(|p| p.lines[0].text.as_str()).collect::<Vec<_>>(),
+        ["/a/one.jpg", "/b/two.jpg", "/c/three.jpg"]
+    );
+    assert_eq!(pages[0].image, "one.jpg");
+}
+
+#[test]
+fn recognize_batch_empty_input_makes_no_process() {
+    let engine = engine_with_fake_bin();
+
+    assert!(engine.recognize_batch(&[]).expect("empty batch").is_empty());
+}
+
+#[test]
+fn recognize_batch_rejects_unlistable_path() {
+    let engine = engine_with_fake_bin();
+
+    for bad in ["", "/b/two\n.jpg", "#commented.jpg"] {
+        let err = engine
+            .recognize_batch(&paths(&["/a/one.jpg", bad]))
+            .expect_err("unlistable path must be rejected");
+        assert!(
+            err.message.contains("image_paths[1]"),
+            "unexpected message: {}",
+            err.message
+        );
+    }
+}
+
+#[test]
+fn recognize_batch_tolerates_exit1_with_json() {
+    // Exit 1 because a page came back empty is an ordinary batch outcome, not
+    // a failure — the array is still on stdout. The fake keys this off a
+    // sentinel *path* the same way recognize's error paths key off an image.
+    let engine = engine_with_fake_bin();
+    let pages = engine
+        .recognize_batch(&paths(&["/a/one.jpg", "--batch-exit1"]))
+        .expect("exit 1 with JSON must be tolerated");
+
+    assert_eq!(pages.len(), 2);
+}
+
+#[test]
+fn recognize_batch_count_mismatch_is_fatal() {
+    // Every check after this one is positional, so a short array has to fail
+    // here rather than shift text onto the wrong file.
+    let engine = engine_with_fake_bin();
+    let err = engine
+        .recognize_batch(&paths(&["/a/one.jpg", "--batch-short"]))
+        .expect_err("count mismatch must be fatal");
+
+    assert!(
+        err.message.contains("cannot match results to inputs by position"),
+        "unexpected message: {}",
+        err.message
+    );
+}
