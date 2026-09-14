@@ -14,7 +14,7 @@ arbo-ocr = { git = "https://github.com/ARBO-TEAM/arbo-ocr-rust" }
 `Engine::new` downloads the matching arboOCR release binary (Windows or
 Linux, auto-detected) the first time it's used if `Config.bin_path` is
 `None` — see "How it works" below. The pinned release is
-[`v0.3.0`](https://github.com/wafik/ArboOCR/releases/tag/v0.4.0). If the
+[`v0.4.0`](https://github.com/wafik/ArboOCR/releases/tag/v0.4.0). If the
 download fails anyway (offline, unsupported OS), grab a release manually
 from the
 [arboOCR releases page](https://github.com/wafik/ArboOCR/releases) and pass
@@ -196,6 +196,14 @@ when `None`, so leaving it unset keeps arboOCR's own default:
 | `det_limit_side_len` | `--det-limit-side-len` | `960` | Longest image side for the detection resize |
 | `log_level` | `--log-level` | silent | `"debug"`/`"info"`/`"warn"`/`"error"` — engine logs on stderr |
 | `word_boxes` | `--word-boxes` | `false` | Also fill `LineResult::words` (see below) |
+| `min_det_box_area` | `--min-det-box-area` | `20.0` | Drops detection boxes at or below this area in detector-input pixels; `Some(0.0)` disables the filter |
+| `space_recovery` | `--space-recovery` | `false` — flag omitted entirely | Recover inter-word spaces greedy CTC decode swallows |
+| `enable_cpu_mem_arena` | `--enable-cpu-mem-arena` | `false` — flag omitted entirely | Leave ORT's CPU memory arena on: faster, higher RSS |
+
+The last three require arboOCR >= `v0.4.0`. All three are opt-in-only:
+`None`/`false` emits nothing at all rather than a `false` value, so a
+`bin_path` pointed at an older release — which does not know these flags and
+exits 1 on an unknown option — keeps working.
 
 `word_boxes: true` adds a `WordBox { text, score, polygon }` per word to
 each line (per *character* for CJK, which has no spaces to split on):
@@ -365,24 +373,44 @@ avoids it from the start.
 
 ## Benchmark
 
-`arbo-ocr-rust` was compared against arbo-ocr-php and arbo-ocr-go on the
-same 5-image SROIE smoke set — all three call the identical `arboocr_demo`
-binary, so accuracy is the same across all three; this measures wrapper
-overhead only (subprocess spawn − arboocr_demo's own reported time):
+`arbo-ocr-rust` was benchmarked against the other five arbo wrapper arms —
+`arbo-cpp`, `arbo-php`, `arbo-go`, `arbo-python`, `arbo-js` — on a
+40-image SROIE sample. All six drive the **same pinned `arboocr_demo`
+v0.4.0 binary**, so accuracy is identical across the arms by construction
+(84.6 / 86.1 / 86.3% at tiny/small/medium) and the only thing left to
+compare is each wrapper's own per-call cost:
 
-| Size | arbo-php | arbo-go | arbo-rust |
-|--------|----------:|---------:|-----------:|
-| tiny | 193 ms | 137 ms | 131 ms |
-| small | 231 ms | 171 ms | 172 ms |
-| medium | 303 ms | 248 ms | 249 ms |
+| Arm | tiny | small | medium |
+|-----|-----:|------:|-------:|
+| arbo-cpp (raw binary, no wrapper) | 322 / 179 | 662 / 478 | 1825 / 1578 |
+| arbo-php | 358 / 169 | 718 / 487 | 1875 / 1569 |
+| arbo-go | 302 / 167 | 753 / 544 | 1877 / 1619 |
+| arbo-rust | 300 / 167 | 657 / 481 | 1866 / 1613 |
+| arbo-python | 381 / 171 | 744 / 492 | 2006 / 1663 |
+| arbo-js | 427 / 220 | 744 / 515 | 1948 / 1645 |
 
-Go and Rust overhead is essentially tied — both are compiled binaries
-paying only process-spawn cost, no interpreter startup. PHP runs ~55–65ms
-higher (`php.exe` interpreter startup on top of `proc_open`). Same accuracy
-across all three; all three match or beat a PP-OCRv6-based Node/Bun
-reference implementation on this sample at every size. Full methodology in
-the "wrapper benchmark" section of the internal `compare/RESULTS.md`
-companion doc (not published in this repo).
+Average wall ms / engine ms per image; `engine ms` is `arboocr_demo`'s own
+reported inference time, and the `arbo-cpp` row is the raw binary with no
+wrapper process in between — the floor the wrappers sit on. What the table
+does *not* support is a ranking of the wrappers: on this run the raw-binary
+row is slower than both compiled wrappers at `tiny`, and the `arbo-go` arm
+picked up a slow tail on a few `small` images (`engine ms` 544 for it
+against 478–515 for the other five arms, on the same binary and the same
+images). An earlier round of this comparison did rank the wrappers — PHP
+~55–65 ms above Go/Rust — but each package then installed its own arboOCR
+release, so that spread was engine-version drift between arms, not wrapper
+overhead. Every arbo arm here still beats the `ppu-paddle-ocr` Node/Bun
+reference on both similarity and wall time at every size (82.8 / 83.5 /
+84.7% at 581 / 944 / 2040 ms).
+
+Absolute milliseconds come from one session on one machine; thermal state
+and background load move every row, so these figures are comparable within
+this table only — never against another session's numbers.
+
+Measured by the internal `compare/` harness (`bench_wrappers.py`, one
+process per image, each calling the pinned binary once) in its 2026-09-14
+run; raw results in `out/bench_wrappers_n40.json`. The harness and its
+output are not published in this repo.
 
 ## License
 
