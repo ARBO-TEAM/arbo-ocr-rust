@@ -15,14 +15,19 @@ const REPO: &str = "wafik/ArboOCR";
 /// arbo-ocr-go pin — the release binary itself is language-agnostic, so all
 /// three packages track the same build.
 ///
-/// v0.3.0 is the first release with model auto-download, so
+/// v0.3.0 added model auto-download, so
 /// [`crate::Config::no_download`], [`crate::Config::models_url`] and
 /// [`crate::Engine::download_models`] drive real behaviour rather than
 /// being passthroughs to flags the binary does not have. It is also the
 /// first archive to ship `onnxruntime_providers_shared`, without which the
 /// CUDA and TensorRT execution providers could not load from a release
 /// archive at all.
-const PINNED_VERSION: &str = "v0.3.0";
+///
+/// v0.4.0 is the current pin: it adds ppu-style recognition batching plus
+/// `--min-det-box-area`, `--space-recovery` and `--enable-cpu-mem-arena`.
+/// Everything v0.3.0 provided is still present, so no flag this crate emits
+/// changed meaning.
+const PINNED_VERSION: &str = "v0.4.0";
 
 /// Returns `"windows-x64"` or `"linux-x64"` based on the compile-time
 /// target, or `None` if unsupported.

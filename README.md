@@ -14,7 +14,7 @@ arbo-ocr = { git = "https://github.com/ARBO-TEAM/arbo-ocr-rust" }
 `Engine::new` downloads the matching arboOCR release binary (Windows or
 Linux, auto-detected) the first time it's used if `Config.bin_path` is
 `None` — see "How it works" below. The pinned release is
-[`v0.3.0`](https://github.com/wafik/ArboOCR/releases/tag/v0.3.0). If the
+[`v0.3.0`](https://github.com/wafik/ArboOCR/releases/tag/v0.4.0). If the
 download fails anyway (offline, unsupported OS), grab a release manually
 from the
 [arboOCR releases page](https://github.com/wafik/ArboOCR/releases) and pass
@@ -30,7 +30,7 @@ layout, the cache location, and how to turn downloading off.
 ## Models
 
 arboOCR doesn't bundle OCR models in the release archive, but as of the
-pinned `v0.3.0` it fetches them itself: any PP-OCRv6 file that isn't already
+pinned `v0.4.0` it fetches them itself: any PP-OCRv6 file that isn't already
 on disk is downloaded, SHA-256 verified, and cached per user before it's
 used. A default `Config` therefore needs no model setup at all. Populating
 `Config.models_dir` yourself is now an optimisation, not a prerequisite.
@@ -67,7 +67,7 @@ applies:
 
 ### Model auto-download
 
-The pinned `v0.3.0` fetches missing models on first use: each file is
+The pinned `v0.4.0` fetches missing models on first use: each file is
 downloaded from
 `https://github.com/ARBO-TEAM/arbo-ocr-models/releases/download/models-v1/`,
 SHA-256 verified, and written to a per-user cache, so the second run is
@@ -306,7 +306,7 @@ see [Model auto-download](#model-auto-download).
 
 OCR models are never bundled in the crate, but they are no longer a manual
 step either. Whether they get *downloaded* is a property of the
-`arboocr_demo` build being run, not of this wrapper, and the pinned `v0.3.0`
+`arboocr_demo` build being run, not of this wrapper, and the pinned `v0.4.0`
 fetches a file it can't find, SHA-256 verifies it, and caches it per user —
 in its own cache directory, separate from this crate's binary cache above.
 A populated `models_dir` short-circuits that entirely. See
