@@ -60,6 +60,29 @@ pub struct Config {
     /// v0.2.0 the binary writes nothing to stderr unless this is passed, so
     /// [`crate::OcrError::stderr`] is empty without it.
     pub log_level: Option<String>,
+    /// Drop detection boxes at or below this area in detector-input pixels;
+    /// `0.0` disables the filter. `None` leaves arboOCR's own default (20.0)
+    /// in place. `Some(0.0)` is a meaningful value, which is why this is an
+    /// `Option` rather than a bare `f32` whose zero would have to double as
+    /// "unset" and make disabling the filter inexpressible.
+    ///
+    /// New in `v0.4.0`. Emitted only when `Some`, so a config that never sets
+    /// it still builds an argv an older binary accepts — see
+    /// [`Config::space_recovery`] for why that matters.
+    pub min_det_box_area: Option<f32>,
+    /// Recover inter-word spaces that greedy CTC decode swallows. `true`
+    /// emits `--space-recovery=true`; `false` (the default) leaves the flag
+    /// off entirely.
+    ///
+    /// New in `v0.4.0`, and off-by-default means "no token at all" rather
+    /// than `--space-recovery=false`, for the same reason as
+    /// [`Config::no_download`]: a [`Config::bin_path`] pointing at an older
+    /// binary does not know this flag and exits 1 on it.
+    pub space_recovery: bool,
+    /// Leave ORT's CPU memory arena on: faster, higher RSS. `true` emits
+    /// `--enable-cpu-mem-arena=true`; `false` (the default) leaves the flag
+    /// off entirely, for the same `v0.4.0` reason as above.
+    pub enable_cpu_mem_arena: bool,
 }
 
 /// Runs the prebuilt `arboocr_demo` binary via `std::process::Command` and
@@ -317,6 +340,13 @@ impl Engine {
             flags.push("--min-confidence".to_string());
             flags.push(v.to_string());
         }
+        // v0.4.0 flag, so `None` must stay off the argv: a pre-v0.4.0 binary
+        // treats it as an unknown option. `Some(0.0)` does emit, and is the
+        // documented way to disable the area filter.
+        if let Some(v) = self.cfg.min_det_box_area {
+            flags.push("--min-det-box-area".to_string());
+            flags.push(v.to_string());
+        }
         let uint_flags: [(&Option<u32>, &str); 2] = [
             (&self.cfg.rec_batch_num, "rec-batch-num"),
             (&self.cfg.det_limit_side_len, "det-limit-side-len"),
@@ -351,6 +381,17 @@ impl Engine {
         // cxxopts reason as the block above.
         if self.cfg.no_download {
             flags.push("--no-download=true".to_string());
+        }
+
+        // Same opt-in-only shape as --no-download above, for the same reason:
+        // both arrived in v0.4.0, and `false` is the binary's own default, so
+        // restating it as `--flag=false` would add nothing but a usage error
+        // against an older bin_path.
+        if self.cfg.space_recovery {
+            flags.push("--space-recovery=true".to_string());
+        }
+        if self.cfg.enable_cpu_mem_arena {
+            flags.push("--enable-cpu-mem-arena=true".to_string());
         }
 
         flags
@@ -540,5 +581,79 @@ mod tests {
             .position(|f| f == "--models-url")
             .expect("--models-url missing");
         assert_eq!(flags[i + 1], "https://mirror.internal/arboocr/models/");
+    }
+
+    /// The three v0.4.0 flags are all opt-in-only, for the same reason as
+    /// `--no-download`: a `bin_path` aimed at an older release does not know
+    /// them, and cxxopts answers an unknown option with a usage error and
+    /// exit 1. A default Config must put nothing on the argv, and the two
+    /// bools must stay silent even when explicitly set to `false` — that is
+    /// the binary's own default, so restating it buys nothing and costs a
+    /// broken run against a pre-v0.4.0 binary.
+    #[test]
+    fn v040_flags_are_opt_in_only() {
+        let defaults = Engine {
+            bin_path: PathBuf::new(),
+            cfg: Config::default(),
+        };
+        let flags = defaults.flags_from_config();
+        for absent in [
+            "--min-det-box-area",
+            "--space-recovery",
+            "--enable-cpu-mem-arena",
+        ] {
+            assert!(
+                !flags.iter().any(|f| f.starts_with(absent)),
+                "{absent} must not be emitted by a default Config"
+            );
+        }
+
+        let explicit_false = Engine {
+            bin_path: PathBuf::new(),
+            cfg: Config {
+                space_recovery: false,
+                enable_cpu_mem_arena: false,
+                ..Default::default()
+            },
+        };
+        let flags = explicit_false.flags_from_config();
+        for absent in ["--space-recovery", "--enable-cpu-mem-arena"] {
+            assert!(
+                !flags.iter().any(|f| f.starts_with(absent)),
+                "{absent} must not be emitted when false"
+            );
+        }
+    }
+
+    /// `0` is a real value for `min_det_box_area` — it disables the filter —
+    /// which is why the field is an `Option<f32>` and not a bare `f32` whose
+    /// zero would have to double as "unset" and make that inexpressible.
+    #[test]
+    fn min_det_box_area_zero_is_a_real_value() {
+        let engine = Engine {
+            bin_path: PathBuf::new(),
+            cfg: Config {
+                min_det_box_area: Some(0.0),
+                space_recovery: true,
+                enable_cpu_mem_arena: true,
+                ..Default::default()
+            },
+        };
+        let flags = engine.flags_from_config();
+
+        let i = flags
+            .iter()
+            .position(|f| f == "--min-det-box-area")
+            .expect("--min-det-box-area missing");
+        assert_eq!(flags[i + 1], "0", "an explicit 0 must reach the binary");
+
+        assert!(flags.contains(&"--space-recovery=true".to_string()));
+        assert!(flags.contains(&"--enable-cpu-mem-arena=true".to_string()));
+        for bare in ["--space-recovery", "--enable-cpu-mem-arena"] {
+            assert!(
+                !flags.contains(&bare.to_string()),
+                "{bare} must not appear as a bare token"
+            );
+        }
     }
 }
